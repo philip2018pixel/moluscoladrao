@@ -59,6 +59,68 @@
     margin-top:8px;
     line-height:1.45;
   }
+  .touch-controls {
+    display:grid;
+    grid-template-columns: 1fr 1fr;
+    gap:14px;
+    margin-top:12px;
+  }
+  .touch-pad {
+    display:grid;
+    grid-template-columns: 1fr 1fr;
+    gap:10px;
+  }
+  .touch-pad.actions {
+    grid-template-columns: 1fr 1fr;
+  }
+  .touch-btn {
+    border:2px solid #f0f4fb;
+    background:#2b3342;
+    color:#fff;
+    font:700 16px "Courier New", monospace;
+    border-radius:10px;
+    padding:16px 10px;
+    min-height:64px;
+    box-shadow: 0 4px 0 #151922;
+    touch-action: none;
+    -webkit-user-select:none;
+    user-select:none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .touch-btn:active {
+    transform: translateY(2px);
+    box-shadow: 0 2px 0 #151922;
+  }
+  .touch-btn.jump { background:#315a8d; }
+  .touch-btn.duck { background:#7b4f1a; }
+  .touch-note {
+    color:#a9b6ca;
+    font-size:12px;
+    margin-top:8px;
+    text-align:center;
+  }
+  @media (min-width: 900px) {
+    .touch-controls { max-width: 640px; margin-left:auto; margin-right:auto; }
+  }
+  @media (max-width: 640px) {
+    .game-shell { padding:8px; }
+    .top {
+      flex-direction:column;
+      align-items:stretch;
+      gap:8px;
+    }
+    .keys {
+      justify-content:space-between;
+      flex-wrap:wrap;
+      text-align:left;
+    }
+    .touch-btn {
+      min-height:68px;
+      font-size:15px;
+      padding:14px 8px;
+    }
+    .legend { font-size:11px; }
+  }
 </style>
 </head>
 <body>
@@ -71,9 +133,22 @@
     </div>
   </div>
   <canvas id="game" width="960" height="540"></canvas>
+
+  <div class="touch-controls" aria-label="Controles touch">
+    <div class="touch-pad">
+      <button class="touch-btn" id="btnLeft" type="button">← ESQ</button>
+      <button class="touch-btn" id="btnRight" type="button">DIR →</button>
+    </div>
+    <div class="touch-pad actions">
+      <button class="touch-btn jump" id="btnJump" type="button">↑ PULAR</button>
+      <button class="touch-btn duck" id="btnDuck" type="button">↓ ABAIXAR</button>
+    </div>
+  </div>
+  <div class="touch-note">Funciona com toque no iPhone/Safari.</div>
+
   <div class="legend">
     Dinheiro = pontos • Mortadela = +1 vida • INSS / Petróleo / MASTER = bônus raros • STF = +3 vidas • Estrela 13 = dinheiro ×2 temporariamente<br>
-    🔊 O áudio começa na primeira tecla/clique, por regra dos navegadores.
+    🔊 O áudio começa na primeira tecla/clique/toque, por regra dos navegadores.
   </div>
 </div>
 
@@ -118,6 +193,10 @@
   let gameOverSoundPlayed = false;
 
   const audioToggle = document.getElementById("audioToggle");
+  const btnLeft = document.getElementById("btnLeft");
+  const btnRight = document.getElementById("btnRight");
+  const btnJump = document.getElementById("btnJump");
+  const btnDuck = document.getElementById("btnDuck");
 
   function ensureAudio() {
     if (!audioCtx) {
@@ -162,6 +241,37 @@
     ensureAudio();
     setMuted(!muted);
   });
+
+  function setVirtualKey(key, pressed) {
+    keys[key] = pressed;
+  }
+
+  function bindHoldControl(el, key) {
+    if (!el) return;
+
+    const press = (ev) => {
+      if (ev) ev.preventDefault();
+      ensureAudio();
+      setVirtualKey(key, true);
+    };
+
+    const release = (ev) => {
+      if (ev) ev.preventDefault();
+      setVirtualKey(key, false);
+    };
+
+    el.addEventListener("touchstart", press, {passive:false});
+    el.addEventListener("touchend", release, {passive:false});
+    el.addEventListener("touchcancel", release, {passive:false});
+    el.addEventListener("mousedown", press);
+    el.addEventListener("mouseup", release);
+    el.addEventListener("mouseleave", release);
+  }
+
+  bindHoldControl(btnLeft, "ArrowLeft");
+  bindHoldControl(btnRight, "ArrowRight");
+  bindHoldControl(btnJump, "ArrowUp");
+  bindHoldControl(btnDuck, "ArrowDown");
 
   // One synthesized arcade note. No external audio files required.
   function tone(freq, duration=0.09, type="square", volume=0.25, when=0, bus="sfx", slideTo=null) {
@@ -357,6 +467,10 @@
   addEventListener("keyup", e => {
     keys[e.key] = false;
   });
+
+  canvas.addEventListener("touchstart", () => {
+    ensureAudio();
+  }, {passive:true});
 
   function rects(a,b) {
     return a.x < b.x+b.w && a.x+a.w > b.x &&
