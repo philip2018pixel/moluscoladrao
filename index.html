@@ -30,7 +30,19 @@
     font-size:14px;
   }
   .title { font-weight:900; letter-spacing:1px; }
-  .keys { opacity:.82; text-align:right; }
+  .keys { opacity:.82; text-align:right; display:flex; align-items:center; gap:12px; }
+  #audioToggle {
+    border:2px solid #e8edf6;
+    background:#242a36;
+    color:#fff;
+    font:700 12px "Courier New", monospace;
+    padding:7px 10px;
+    cursor:pointer;
+    border-radius:4px;
+    box-shadow:2px 2px 0 #111;
+  }
+  #audioToggle:hover { background:#343c4c; }
+  #audioToggle:active { transform:translate(1px,1px); box-shadow:1px 1px 0 #111; }
   canvas {
     display:block;
     width:100%;
@@ -53,11 +65,15 @@
 <div class="game-shell">
   <div class="top">
     <div class="title">MONEY RUN — RETRO ESCAPE</div>
-    <div class="keys">← → mover &nbsp; ↑ pular &nbsp; ↓ abaixar &nbsp; R reiniciar</div>
+    <div class="keys">
+      <span>← → mover &nbsp; ↑ pular &nbsp; ↓ abaixar &nbsp; R reiniciar</span>
+      <button id="audioToggle" type="button">🔊 SOM</button>
+    </div>
   </div>
   <canvas id="game" width="960" height="540"></canvas>
   <div class="legend">
-    Dinheiro = pontos • Mortadela = +1 vida • INSS / Petróleo / MASTER = bônus raros • STF = +3 vidas • Estrela 13 = dinheiro ×2 temporariamente
+    Dinheiro = pontos • Mortadela = +1 vida • INSS / Petróleo / MASTER = bônus raros • STF = +3 vidas • Estrela 13 = dinheiro ×2 temporariamente<br>
+    🔊 O áudio começa na primeira tecla/clique, por regra dos navegadores.
   </div>
 </div>
 
@@ -88,6 +104,189 @@
   let flashText = "";
   let flashTimer = 0;
   let flashY = 220;
+
+  // ---------- RETRO AUDIO ENGINE ----------
+  let audioCtx = null;
+  let masterGain = null;
+  let musicGain = null;
+  let sfxGain = null;
+  let audioStarted = false;
+  let muted = false;
+  let musicStep = 0;
+  let musicLoopRunning = false;
+  let wasDucking = false;
+  let gameOverSoundPlayed = false;
+
+  const audioToggle = document.getElementById("audioToggle");
+
+  function ensureAudio() {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+
+      audioCtx = new AC();
+
+      masterGain = audioCtx.createGain();
+      musicGain = audioCtx.createGain();
+      sfxGain = audioCtx.createGain();
+
+      masterGain.gain.value = muted ? 0 : 0.72;
+      musicGain.gain.value = 0.18;
+      sfxGain.gain.value = 0.58;
+
+      musicGain.connect(masterGain);
+      sfxGain.connect(masterGain);
+      masterGain.connect(audioCtx.destination);
+    }
+
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    audioStarted = true;
+
+    if (!musicLoopRunning) {
+      musicLoopRunning = true;
+      musicLoop();
+    }
+    return true;
+  }
+
+  function setMuted(value) {
+    muted = value;
+    if (masterGain && audioCtx) {
+      masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
+      masterGain.gain.setTargetAtTime(muted ? 0 : 0.72, audioCtx.currentTime, 0.02);
+    }
+    audioToggle.textContent = muted ? "🔇 SOM" : "🔊 SOM";
+  }
+
+  audioToggle.addEventListener("click", () => {
+    ensureAudio();
+    setMuted(!muted);
+  });
+
+  // One synthesized arcade note. No external audio files required.
+  function tone(freq, duration=0.09, type="square", volume=0.25, when=0, bus="sfx", slideTo=null) {
+    if (!audioCtx || muted) return;
+    const start = audioCtx.currentTime + when;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    const target = bus === "music" ? musicGain : sfxGain;
+
+    osc.type = type;
+    osc.frequency.setValueAtTime(Math.max(40, freq), start);
+    if (slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(40, slideTo), start + duration);
+
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.001, volume), start + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+
+    osc.connect(gain);
+    gain.connect(target);
+    osc.start(start);
+    osc.stop(start + duration + 0.03);
+  }
+
+  function noiseBurst(duration=0.08, volume=0.15) {
+    if (!audioCtx || muted) return;
+    const length = Math.max(1, Math.floor(audioCtx.sampleRate * duration));
+    const buffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i=0; i<length; i++) data[i] = (Math.random()*2-1) * (1-i/length);
+
+    const src = audioCtx.createBufferSource();
+    const gain = audioCtx.createGain();
+    src.buffer = buffer;
+    gain.gain.value = volume;
+    src.connect(gain);
+    gain.connect(sfxGain);
+    src.start();
+  }
+
+  const SFX = {
+    jump() {
+      tone(220,.08,"square",.18,0,"sfx",390);
+      tone(420,.05,"square",.10,.07);
+    },
+    duck() {
+      tone(260,.08,"sawtooth",.10,0,"sfx",120);
+    },
+    money() {
+      tone(880,.055,"square",.15);
+      tone(1175,.07,"square",.13,.055);
+    },
+    heal() {
+      tone(523,.09,"square",.15);
+      tone(659,.09,"square",.15,.08);
+      tone(784,.14,"square",.17,.16);
+    },
+    jackpot() {
+      [523,659,784,1047].forEach((f,i)=>tone(f,.13,"square",.18,i*.075));
+    },
+    oil() {
+      tone(110,.16,"sawtooth",.18,0,"sfx",75);
+      tone(220,.10,"square",.12,.12);
+      tone(440,.12,"square",.13,.21);
+    },
+    master() {
+      [659,830,988,1319].forEach((f,i)=>tone(f,.15,"square",.19,i*.065));
+      tone(1976,.20,"square",.13,.29);
+    },
+    stf() {
+      [392,523,659,784,1047].forEach((f,i)=>tone(f,.13,"triangle",.20,i*.07));
+      tone(1568,.24,"square",.14,.34);
+    },
+    star13() {
+      tone(330,.10,"square",.18);
+      tone(495,.10,"square",.18,.08);
+      tone(660,.10,"square",.18,.16);
+      tone(990,.28,"square",.20,.24);
+    },
+    starEnd() {
+      tone(660,.10,"square",.10);
+      tone(440,.12,"square",.10,.09);
+      tone(220,.18,"square",.10,.18);
+    },
+    dangerCuffs() {
+      tone(740,.07,"square",.12);
+      tone(560,.07,"square",.12,.08);
+      tone(740,.07,"square",.12,.16);
+    },
+    dangerWork() {
+      tone(165,.09,"square",.14);
+      tone(165,.09,"square",.14,.11);
+      tone(220,.13,"sawtooth",.13,.22);
+    },
+    hit() {
+      noiseBurst(.11,.19);
+      tone(150,.20,"sawtooth",.20,0,"sfx",65);
+    },
+    gameover() {
+      [392,330,262,196,131].forEach((f,i)=>tone(f,.23,"square",.15,i*.16));
+      tone(65,.55,"sawtooth",.13,.78);
+    }
+  };
+
+  function musicLoop() {
+    if (!musicLoopRunning) return;
+
+    if (audioCtx && audioStarted && !muted && !gameOver) {
+      // Cheeky 8-bit arpeggio, with tempo increasing as the run speeds up.
+      const melody = [261.63,329.63,392.00,329.63,293.66,369.99,440.00,369.99,
+                      246.94,329.63,392.00,493.88,293.66,349.23,440.00,349.23];
+      const bass = [65.41,65.41,73.42,73.42,61.74,61.74,73.42,73.42];
+
+      const mf = melody[musicStep % melody.length];
+      const bf = bass[Math.floor(musicStep/2) % bass.length];
+
+      tone(mf,.095,"square",.10,0,"music");
+      if (musicStep % 2 === 0) tone(bf,.14,"triangle",.12,0,"music");
+      if (musicStep % 4 === 2) tone(bf*2,.055,"square",.045,.03,"music");
+
+      musicStep++;
+    }
+
+    const delay = Math.max(95, 175 - Math.max(0, speed-5.3)*8);
+    setTimeout(musicLoop, delay);
+  }
 
   const obstacles = [];
   const moneyItems = [];
@@ -144,9 +343,12 @@
     flashText = "";
     flashTimer = 0;
     shake = 0;
+    wasDucking = false;
+    gameOverSoundPlayed = false;
   }
 
   addEventListener("keydown", e => {
+    ensureAudio();
     keys[e.key] = true;
     if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
     if (e.key.toLowerCase() === "r") reset();
@@ -239,6 +441,10 @@
 
   function spawnMovingHazard() {
     const type = Math.random() < .5 ? "handcuffs" : "notebook";
+    if (audioStarted) {
+      if (type === "handcuffs") SFX.dangerCuffs();
+      else SFX.dangerWork();
+    }
     if(type==="handcuffs") {
       movingHazards.push({
         type,
@@ -270,7 +476,14 @@
     player.onGround = false;
     shake = 13;
     popup("-1 VIDA", 180);
-    if(player.lives <= 0) gameOver = true;
+    SFX.hit();
+    if(player.lives <= 0) {
+      gameOver = true;
+      if (!gameOverSoundPlayed) {
+        gameOverSoundPlayed = true;
+        setTimeout(() => SFX.gameover(), 120);
+      }
+    }
   }
 
   function collectRare(item) {
@@ -282,32 +495,38 @@
         if(player.lives < player.maxLives) player.lives++;
         cashTotal += 500 * multiplier;
         popup("MORTADELA! +1 VIDA", 185);
+        SFX.heal();
         particlesBurst(item.x,item.y,"#f08ca3",18);
         break;
       case "inss":
         cashTotal += 3000 * multiplier;
         popup("INSS +$3000", 185);
+        SFX.jackpot();
         particlesBurst(item.x,item.y,"#4aa2ff",18);
         break;
       case "oil":
         cashTotal += 4000 * multiplier;
         popup("PETRÓLEO +$4000", 185);
+        SFX.oil();
         particlesBurst(item.x,item.y,"#1a1a1a",20);
         break;
       case "master":
         cashTotal += 5000 * multiplier;
         popup("MASTER +$5000", 185);
+        SFX.master();
         particlesBurst(item.x,item.y,"#ffd34d",22);
         break;
       case "stf":
         player.lives = Math.min(player.maxLives, player.lives + 3);
         popup("STF! +3 VIDAS", 185);
+        SFX.stf();
         particlesBurst(item.x,item.y,"#8bd3ff",24);
         break;
       case "star13":
         multiplier = 2;
         multiplierTimer = 12000;
         popup("ESTRELA 13! DINHEIRO ×2", 185);
+        SFX.star13();
         particlesBurst(item.x,item.y,"#e83333",26);
         break;
     }
@@ -326,6 +545,7 @@
         multiplier = 1;
         multiplierTimer = 0;
         popup("MULTIPLICADOR ACABOU", 185);
+        SFX.starEnd();
       }
     }
 
@@ -333,6 +553,8 @@
     player.inv = Math.max(0, player.inv-dt);
 
     player.ducking = !!keys["ArrowDown"] && player.onGround;
+    if (player.ducking && !wasDucking) SFX.duck();
+    wasDucking = player.ducking;
 
     if(keys["ArrowLeft"]) player.x -= 5.2*s;
     if(keys["ArrowRight"]) player.x += 5.2*s;
@@ -341,6 +563,7 @@
     if((keys["ArrowUp"] || keys[" "]) && player.onGround && !player.ducking) {
       player.vy = -15.8;
       player.onGround = false;
+      SFX.jump();
     }
 
     player.vy += .82*s;
@@ -434,6 +657,7 @@
         const got = m.value * multiplier;
         cashTotal += got;
         popup(`+$${got}`, 220);
+        SFX.money();
         particlesBurst(m.x,m.y,"#62d177",7);
       }
     }
